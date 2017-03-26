@@ -1,9 +1,245 @@
 # json-api-normalizer: Easy Way To Integrate JSON API And Redux
 ![JSON API + redux](https://habrastorage.org/files/325/507/e71/325507e71b1c43399d89018f3601ae6f.jpg)
 
-[JSON API](http://jsonapi.org/) standard is becoming more and more popular nowadays. From my perspective, it is a very convenient solution for representing data, which helps to focus on business logic rather than on developing parsers and serializers on server and client sides over and over again.
+As a Front-end Developer, for each and every application I work on I need to decide, how to manage the data. The problem can be broken down to the three following subproblems:
 
-# JSON API vs. Typical Web-Services
+1) Fetching data from the backend
+2) Storing it somewhere locally in the front-end application
+3) Retrieving the data from the local store and format it in a way required for the particular view or screen
+
+This article sums up my experiences with consuming data from JSON, JSON API, and GraphQL backends, and gives practical recommendations on how to manage the front-end application data.
+
+To illustrate my ideas and make an article closer to the real-world use-cases, I would develop a very simple frontend application by the end of the article. The scenario is following: imagine, we implement a survey, which asks the same pile of questions many users. After each user provides his or her answers, other users might comment them if desired. Our Web App will perform a request to the backend, store fetched data in the local store and render the content on the page. To keep things simple, we will omit the answer creation flow this time.
+
+![live](https://habrastorage.org/files/d6e/c8b/321/d6ec8b321dbc481ab628b266e6de08da.png)
+
+Live demo is also available [here](https://yury-dymov.github.io/json-api-react-redux-example/).
+
+# Backstory
+
+Within the last couple of years, I participated in many frontend projects based on React stack. We are using Redux for the state management not only because it is the most widely-used solution in this category according to the recent [State of JavaScript in 2016](http://stateofjs.com/2016/statemanagement/) survey, but it is also very lightweight, straightforward and predictable. Yes, sometimes it is required to write a lot more boilerplate code compared to other available state management solutions but on the other hand, you can fully understand and control how your application works, which gives you a lot of freedom to implement any business logic and scenarios. 
+
+To give you the context, some time ago we tried [GraphQL](http://graphql.org/) and [Relay](https://facebook.github.io/relay/) in one of our Proof-of-Concept projects. Don't get me wrong, it works great, but every time we wanted to implement slightly different flow from the standard one, we were fighting with our stack instead of delivering new features. I know that many things changed since then, and Relay is a decent solution now, but we learned the hard way that using simple and predictable tools work better for us as we can plan our development process more precisely and meet our deadlines. 
+
+*Note: before moving forward I assume that you have some basic knowledge on state management and either Flux or Redux*
+
+# Redux Best Practices
+
+The best things about Redux is that it is unopinionated on what kind of API you consume. You can even change your API from JSON to JSON API or GraphQL and back during the development and in case your preserve your data model, this will not affect your state management implementation at all. This is possible because before you put API response to the store you should process it in a certain way. Redux itself doesn't force you to do that but community discovered and developed several best practises based on real-world experience. Following them will help you to save a lot of time by reducing complexity of your applications and decrease number of bugs and corner cases.
+
+## 1. Keep Data Flat In The Redux Store
+Let's go back to the demo application scenario and discuss the Data Model:
+
+![relationships](https://github.com/yury-dymov/phoenix-json-api-example/raw/master/docs/diagram.png)
+
+Here we have a Question data object, which might have many Post objects. Each Post might have many Comment objects. Each Post and Comment has one Author respectfully. 
+
+Let's assume; we have a backend, which returns a typical JSON response. Very likely it would have a deeply nested structure. If you prefer to store your data in a similar manner in the store, you will sooner or later face many issues. For example, you might store the same object several times. For example, you might have a Post and Comment objects, which share the same Author. Your store will look like this:
+
+```JSON
+{
+  "text": "My Post",
+  "author": {
+    "name": "Yury",
+    "avatar": "avatar1.png"
+  },
+  "comments": [
+    {
+      "text": "Awesome Comment",
+      "author": {
+            "name": "Yury",
+        "avatar": "avatar1.png"      
+      }
+    }
+  ]
+}
+```
+
+As you can see, we store the same Author Object in several places, which not only requires more memory but also has negative side-effects. Imagine, in the backend somebody changed the user's avatar. Instead of updating one object in the redux store, you now need to traverse the whole state and update all instances of the same object. Not only it might be very slow, but also requires you to learn precisely the data object structure. Refactoring will be a nightmare as well. Another issue is that if you decide to reuse certain data objects for new views, and they would be nested into some other objects, traversal implementation would also be complex, slow and dirty.
+
+Instead, we can store the data in a flatten structure. This way each object will be stored only once, and we will have a very easy access to any data.
+
+```JSON
+{
+  "post": [{
+    "id": 1,
+    "text": "My Post",
+    "author": { "id": 1 },
+    "comments": [ { "id": 1 } ]
+  }],
+  "comment": [{
+    "id": 1,
+    "text": "Awesome Comment"
+  }],
+  "author": [{
+    "name": "Yury",
+    "avatar": "avatar1.png",
+    "id": 1
+  }]
+ }
+```
+
+Same principles are widely used in [RDMBS](https://en.wikipedia.org/wiki/Relational_database_management_system) for many years.
+
+## 2. Store Collections As Maps Whenever Possible
+
+Ok, so we got the data in a nice flat structure. It is a very common practice to incrementally accumulate received data in either Redux store and/or local storage so that we can re-use it later as a cache to improve the performance or for the offline usage.
+
+However, after merging new data to the existing storage, we need to select only relevant data objects for the particular view, not everything we received so far. To achieve that, we can store the structure of each JSON document separately, so we can quickly figure out, which data objects were provided within a particular request. This structure will contain a list of the data object IDs, which we can use to fetch the data from the storage.
+
+Let me illustrate this point. We will perform two requests to fetch a list of friends of two different users Alice and Bob and review the content of our storage accordingly. To make things easier, let's assume that in the beginning, the storage is empty.
+
+#### /alice/friends Response
+```JSON
+{
+  "data": [{
+    "type": "User",
+    "id": "1",
+    "attributes": {
+      "name": "Alice"
+    }
+  }]
+}
+```
+
+So, here we are getting User data object with ID "1" and name "Mike," which might be stored like this:
+
+#### Storage State #1
+```JSON
+{
+  "users": [
+    {
+      "id": "1",
+      "name": "Mike"
+    }
+  ]
+}
+```
+
+Another request will return us User with ID "2" and name "Kevin":
+
+#### /bob/friends Response
+```JSON
+{
+  "data": [{
+    "type": "User",
+    "id": "2",
+    "attributes": {
+      "name": "Kevin"
+    }
+  }]
+}
+```
+
+After merge our storage will look like this:
+
+#### Storage State #2
+```JSON
+{
+  "users": [
+    {
+      "id": "1",
+      "name": "Mike"
+    },
+    {
+        "id": "2",
+        "name": "Kevin"
+    }
+  ]
+}
+```
+
+And the big question is, how can we distinguish from this point, which users are Alices' friends and which are Bobs'?
+
+For example, we could preserve the structure of the JSON API document, so we might quickly figure out, which data objects in the storage are relevant. Keeping this in mind, we can change the implementation of the storage so that it might look like this:
+
+#### Storage State #2 With Metadata
+```JSON
+{
+  "users": [
+    {
+      "id": "1",
+      "name": "Mike"
+    },
+    {
+        "id": "2",
+        "name": "Kevin"
+    }
+  ],
+  "meta": {
+      "/alice/friends": [
+        {
+          "type": "User",
+          "id": "1"
+        }          
+      ],
+      "/bob/friends": [
+        {
+          "type": "User",
+          "id": "2"
+        }
+      ]
+  }
+}
+``` 
+
+Now, we can read the metadata and fetch all mentioned data objects. Problem solved! Can we do better? Note that we constantly doing three operations: insert, read and merge. Which data structure will work the best for us from the performance perspective?
+
+Let's briefly recap operation complexities.
+
+| Type | Add | Delete | Search | Preserves Order |
+------|:---------------:|:-----------:| :-----------: | :-----------: |
+| Map | O(1) | O(1) | O(1) | No |
+| Array | O(1)| O(n) | O(n) | Yes |
+
+*Note: if you are note very familiar with Big O Notation, "n" here means the number of data objects, O(1) means that operation will take relatively the same amount of time regardless of the data set size, and O(n) means that operation execution time is linearly dependent on the data set size. You can read more on Big O Notation [here](https://en.wikipedia.org/wiki/Big_O_notation)* 
+
+As we can see, Maps will work a lot better than Arrays as all operations have complexity O(1) instead of O(n). If data object order is important, we still can use Maps for the data handling and save the ordering information in the metadata.
+
+Let me reimplement storage mentioned above and use Map over Array for the User data object.
+
+#### Storage State #2 Revised
+```JSON
+{
+  "users": {
+      "1": {
+        "name": "Mike"
+      },
+      "2": {
+        "name": "Kevin"
+      }
+  },
+  "meta": {
+      "/alice/friends": [
+        {
+          "type": "User",
+          "id": "1"
+        }          
+      ],
+      "/bob/friends": [
+        {
+          "type": "User",
+           "id": "2"
+        }
+      ]
+  }
+}
+``` 
+
+Now, instead of iterating over the whole array to find the certain user, you can get it by ID almost instantly.
+
+# Processing The Data And JSON API
+As you can imagine, there should be a widely-used solution to convert JSON documents to the Redux-friendly form. [Normalizr](https://github.com/paularmstrong/normalizr) library was initially developed by Dan Abramov, the author of Redux, for this particular purpose. You have to provide JSON document and the scheme to `normalize` function, and it will return the data in a nice flat structure, which we can save in the Redux store. 
+
+We used this approach in many projects, and while it works great if you know your data model in advance, which doesn't change much within application lifecycle, it dramatically fails if things are too dynamic. For example, when you are prototyping, developing a Proof-of-Concept or a new product, the data model changes very frequently to fulfill new requirements and change requests. Each backend change should be reflected in a normalizr scheme update. Because of this, I ended up fighting with my frontend app to fix things rather than working on new features several times.
+
+Are there any alternatives? We tried out GraphQL and JSON API. 
+
+While GraphQL seems very promising and might be an interesting choice, we were not able to adopt it at that time as our APIs are consumed by many 3d Parties, and we can't just drop the REST approach. 
+
+Let's briefly discuss [JSON API](http://jsonapi.org/) standard.
+
+## JSON API vs. Typical Web-Services
 JSON API main features:
 
 * data is represented in a flat structure with no more, than one level deep relationships
@@ -72,7 +308,7 @@ JSON API main features:
     "id": "324",
     "attributes": {
       "id": 324,
-      "text": "Great job, Bro!"
+      "text": "Great job!"
     },
     "relationships": {
       "commenter": {
@@ -103,221 +339,13 @@ Let's discuss the advantages.
 * Second, data is provided in the form of typified objects, which means that on the client side you don't need to implement parsers or define schemes like you do with [normalizr](https://github.com/paularmstrong/normalizr). This makes your front-end apps more prone to the data structure changes and requires fewer efforts from your side to adapt your application for the new requirements.
 * Third, JSON API specification defines "links" object, which helps to move pagination, filtering and sorting feature implementation from your application to the JSON API clients. There is also an optional "meta" object available, where you can define your app-specific payload.
 
-# Editor Note: This is where you should put a bit more about why you're using Redux. The *Note directly below doesn't quite offer the detail I feel is needed to best articulate that.
-
-Ok, we spent some time on discussing web services and data representation formats. However, as frontend developers, we are a lot more interested in consuming data. Imagine we made a request to the backend, got the JSON API document as a response and now we need to prepare and store it somewhere to provide the data to React components or any other view library you prefer. According to the recent survey [State of JavaScript in 2016](http://stateofjs.com/2016/statemanagement/), there is a very high probability that you will use Redux for that. Before going further, we need to recap Redux best practices on data formatting and check, how it conforms with JSON API.
-
-*Note: best practices below can be applied to other state management solutions like Mobx or less widespread Flux implementations*
 
 
-# Redux Best Practices
-## 1. Keep Data Flat In The Redux Store
-Many JSON documents have a deeply nested structure. If you prefer to store your data in a similar manner in the store, you will sooner or later face many issues. For example, you might store the same object several times. For example, you might have a Post and Comment objects, which share the same Author. Your store will look like this:
-
-```JSON
-{
-  "text": "My Post",
-  "author": {
-    "name": "Yury",
-    "avatar": "avatar1.png"
-  },
-  "comments": [
-    {
-      "text": "Awesome Comment",
-      "author": {
-   		 "name": "Yury",
-	    "avatar": "avatar1.png"      
-      }
-    }
-  ]
-}
-```
-
-As you can see, we store the same Author Object in several places, which not only requires more memory but also has negative side-effects. Imagine, in the backend somebody changed the user's avatar. Instead of updating one object in the redux store, you now need to traverse the whole state and update all instances of the same object. Not only it might be very slow, but also requires you to learn precisely the data object structure. Refactoring will be a nightmare as well. Another issue is that if you decide to reuse certain data objects for new views, and they would be nested into some other objects, traversal implementation would also be complex, slow and dirty.
-
-Instead, we can store the data in a flatten structure. This way each object will be stored only once, and we will have a very easy access to any data.
-
-```JSON
-{
-  "post": [{
-    "id": 1,
-    "text": "My Post",
-    "author": { "id": 1 },
-    "comments": [ { "id": 1 } ]
-  }],
-  "comment": [{
-    "id": 1,
-    "text": "Awesome Comment"
-  }],
-  "author": [{
-    "name": "Yury",
-    "avatar": "avatar1.png",
-    "id": 1
-  }]
- }
-```
-
-Same principles are widely used in [RDMBS](https://en.wikipedia.org/wiki/Relational_database_management_system) for many years.
-
-## 2. Store Collections As Maps Whenever Possible
-
-# Editor Note: I think this sections needs to be fleshed out more and offer more details about the differences in performance and use cases. This feels like a passing comment & doesn't quite explain to the reader "why?".
-
-Ok, so we got the data in a nice flat structure. It is a very common practice to incrementally accumulate received data in either Redux store and/or local storage so that we can re-use it later as a cache to improve the performance or for the offline usage.
-
-However, after merging new data to the existing storage, we need to select only relevant data objects for the particular view, not everything we received so far. To achieve that, we can store the structure of each JSON API document separately, so we can quickly figure out, which data objects were provided within a particular request. This structure will contain a list of the data object IDs, which we can use to fetch the data from the storage.
-
-Let me illustrate this point. We will perform two requests to fetch a list of friends of two different users Alice and Bob and review the content of our storage accordingly. To make things easier, let's assume that in the beginning, the storage is empty.
-
-#### /alice/friends Response
-```JSON
-{
-  "data": [{
-    "type": "User",
-    "id": "1",
-    "attributes": {
-      "name": "Mike"
-    }
-  }]
-}
-```
-
-So, here we are getting User data object with ID "1" and name "Mike," which might be stored like this:
-
-#### Storage State #1
-```JSON
-{
-  "users": [
-    {
-      "id": "1",
-      "name": "Mike"
-    }
-  ]
-}
-```
-
-Another request will return us User with ID "2" and name "Kevin":
-
-#### /bob/friends Response
-```JSON
-{
-  "data": [{
-    "type": "User",
-    "id": "2",
-    "attributes": {
-      "name": "Kevin"
-    }
-  }]
-}
-```
-
-After merge our storage will look like this:
-
-#### Storate State #2
-```JSON
-{
-  "users": [
-    {
-      "id": "1",
-      "name": "Mike"
-    },
-    {
-    	"id": "2",
-    	"name": "Kevin"
-    }
-  ]
-}
-```
-
-And a big question is, how can we distinguish from this point, which users are Alices' friends and which are Bobs'?
-
-For example, we could preserve the structure of the JSON API document, so we might quickly figure out, which data objects in the storage are relevant. Keeping this in mind, we can change the implementation of the storage, so it might look like this:
-
-#### Storage State #2 With Metadata
-```JSON
-{
-  "users": [
-    {
-      "id": "1",
-      "name": "Mike"
-    },
-    {
-    	"id": "2",
-    	"name": "Kevin"
-    }
-  ],
-  "meta": {
-  	"/alice/friends": [
-  	  {
-  	    "type": "User",
-  	    "id": "1"
-  	  }  		
-  	],
-  	"/bob/friends": [
-  	  {
-  	    "type": "User",
-  	    "id": "2"
-  	  }
-  	]
-  }
-}
-``` 
-
-Now, we can read the metadata and fetch all mentioned data objects. Problem solved! Can we do better? Note that we constantly doing three operations: insert, read and merge. Which data structure will work the best for us from the performance perspective?
-
-Let's briefly recap operation complexities.
-
-| Type | Add | Delete | Search | Preserves Order |
-------|:---------------:|:-----------:| :-----------: | :-----------: |
-| Map | O(1) | O(1) | O(1) | No |
-| Array | O(1)| O(n) | O(n) | Yes |
-
-As we can see, Maps will work a lot better than Arrays as all operations have complexity O(1) instead of O(n). If data object order is important, we still can use Maps for the data handling and save the ordering information in the metadata.
-
-*Note: JSON API specification guarantees that each data object MUST have a unique ID. This is why Map option is not only available but very easy to use.*
-
-Let me reimplement storage mentioned above and use Map over Array for the User data object.
-
-#### Storage State #2 Revised
-```JSON
-{
-  "users": {
-  	"1": {
-  	  "name": "Mike"
-  	},
-  	"2": {
-  	  "name": "Kevin"
-  	}
-  },
-  "meta": {
-  	"/alice/friends": [
-  	  {
-  	    "type": "User",
-  	    "id": "1"
-  	  }  		
-  	],
-  	"/bob/friends": [
-  	  {
-  	    "type": "User",
-  		 "id": "2"
-  	  }
-  	]
-  }
-}
-``` 
-
-Now, instread of iterating over the whole array to find the certain user, you can get it by ID almost instantly.
-
-
-# JSON API And Redux
-
-# Editor Note: Reading through I'm not convinced of the following statement because I feel there's still more that needs to be outlined as to why you're choosing Redux as well as why the best practices matter within the context of this article and demo app.
-
-# Yury's note: regarding Redux choice, I wrote more detailed above. I think it should be enough, let me know if we can improve further here.
+## JSON API And Redux
 
 How two work together? Absolutely great!
 
-JSON API provides data in a flat structure by definition, which conforms nicely with Redux best practices. Data comes typified, so it can be naturally saved in the Redux storage in a Map with the format "type" => Map of objects. Are we missing something?
+JSON API provides data in a flat structure by definition, which conforms nicely with Redux best practices. Data comes typified so that it can be naturally saved in the Redux storage in a Map with the format "type" => Map of objects. Are we missing something?
 
 Despite the fact that dividing data objects into two types `data` and `included` might make some sense for the application, we can't afford to store them as two separate entities in the redux store as otherwise the same data objects will be stored more than one time, which violates redux best practiсes.
 
@@ -330,77 +358,21 @@ Main features:
 1. Merging `data` and `included` fields, normalizing the data
 2. Collections are converted into maps in a form `id` => `object`
 3. Original response structure is stored in a special `meta` object
-4. One-to-many relationships are merged into one object with serialized IDs
-
-Let me explain 3d and 4th points.
 
 First of all, distinguishing `data` and `included` data objects was introduced in JSON API specification to resolve issues with recursive structures and circular dependencies. Second, most of the times, data in redux is incrementally updated, which helps to improve performance and implement offline support. However, as we work with the same data objects in our application, sometimes it is not possible to distinguish, which data objects should we use for a particular view. 
 json-api-normalizer can store web service response structure in a special `meta` field, so you can unambiguously determine, which data objects were fetched for a specific API request.
 
-json-api-normalizer is also converting one-to-many relationships from JSON API format
-
-```JSON
-{
-  "relationships": {
-    "comments": [{
-      "type": "comment",
-      "id": "1",
-    }, {
-      "type": "comment",
-      "id": "2",    
-    }, {
-      "type": "comment",
-      "id": "3",    
-    }]
-  }
-}
-```
-
-to this format
-
-```JSON
-{
-  "relationships": {
-    "comments": {
-      "type": "comment",
-      "id": "1,2,3"
-    }
-  }
-}
-```
-
-From my experience, this format is more suitable for redux as you can easily update the data and relationships with one `merge`, where you need to specify a new string of IDs, rather than explicitly finding in array required an object and deleting it manually. However, this form might not suit every use-case, so if you feel that you want to override my format, feel free to send your pull request.
-
-# Practical Example
-
-# Editor's Note: I think this section should be clearer giving more context as to what's being built and what to expect. For example, I feel that the reference to the API is not clear enough and while you don't need to go in-depth on Pheonix since this is front-end specific, I think you should be clear that you're using it and what the results from the API will be. Basically, don't leave it to the reader to guess.
+# Demo App Implementation
 
 *Note: I assume that you have some practical experience with React and Redux so far.*
 
-We are going to build a very simple Web Application. Imagine, we implement a survey, which asks the same pile of questions many users. After user provide his or her answers, other users might comment them if desired.
+Once again, we will build a very simple web app, which will render the survey data provided by backend in a JSON API format. 
 
-To keep things simple, we will focus only on fetching and rendering the data provided by the backend in a JSON API format, leaving creating new posts and comments behind.
-
-From the technical perspective, data in a JSON API format from the backend will be processed by json-api-normalizer library and saved into the Redux store. Afterward, connected React components will visualize our data in the browser accordingly.
-
-Data model is quite straightforward.
-
-![relationships](https://github.com/yury-dymov/phoenix-json-api-example/raw/master/docs/diagram.png)
-
-Here we have a Question data object, which might have many Post objects. Each Post might have many Comment objects. Each Post and Comment has one Author respectfully. 
-
-Our Web App will perform a request to the backend, store fetched data in the Redux store and render the content on the page.
-
-So, we need a backend with a JSON API support. As this article is fully dedicated to the frontend development, I prebuilt publically available data source so that we can focus on our Web App. If you are interested, you may check [the source code](https://github.com/yury-dymov/phoenix-json-api-example). Note that there are many [JSON API implementation libraries](http://jsonapi.org/implementations/) available for all kind of technology stacks, so feel free to choose one, which will work best for you.
+First of all, we need a backend with a JSON API support. As this article is fully dedicated to the frontend development, I prebuilt publically available data source so that we can focus on our Web App. If you are interested, you may check [the source code](https://github.com/yury-dymov/phoenix-json-api-example). Note that there are many [JSON API implementation libraries](http://jsonapi.org/implementations/) available for all kind of technology stacks, so feel free to choose one, which will work best for you.
 
 My demo web service provides us two questions. First one has two answers, second — three. The second answer to the first question has three comments.
 
-You can review the web service output [here](https://phoenix-json-api-example.herokuapp.com/api/test), which will be converted to something similar to this after user presses the button and data is successfully fetched.
-
-![live](https://habrastorage.org/files/d6e/c8b/321/d6ec8b321dbc481ab628b266e6de08da.png)
-
-Live demo is also available [here](https://yury-dymov.github.io/json-api-react-redux-example/).
-
+You can review the web service output [here](https://phoenix-json-api-example.herokuapp.com/api/test), which will be converted to something similar to this after the user presses the button, and data is successfully fetched.
 
 ## 1. Download The Boilerplate
 To reduce time on Web App configuration, I developed [small React boilerplate](https://github.com/yury-dymov/json-api-react-redux-example/tree/initial), which can be used as a starting point.
@@ -778,7 +750,7 @@ User Component package.json:
 }
 ```
 
-User Component renders some meaningful information about either answer or comment author. In this app, we will output just user's name, but in the real world, we could add avatar and other nice things for a better User Experience.
+User Component renders some meaningful information about either answer or comment author. In this app, we will output just user's name, but in the real world, we could add an avatar and other nice things for a better User Experience.
 #### src/components/User/User.jsx
 ```JavaScript
 import React, { PropTypes } from 'react';
@@ -831,21 +803,16 @@ Comment.propTypes = propTypes;
 export default Comment;
 ```
 
-# Editor's Note: This sentence seems very abrupt with no real closure. I think a better call to action or guidance is merited here. 
-
 And we are done! Open the browser, press the button, and enjoy the result. 
 
 If something doesn't work for you, feel free to compare your code with [my project master branch](https://github.com/yury-dymov/json-api-react-redux-example)
 
 Live demo is also available [here](https://yury-dymov.github.io/json-api-react-redux-example)
 
-The thing, which I like the most, is that the persistence layer of the App is very simple and flexible. You had to add only one line of code to the middleware and now your JSON API data is saved in the Redux store in a format, which conforms with the Redux best practices and very easy to use. You can focus on delivering great User Experience, develop new features, and business needs overall rather than implementing different selectors, normalizers and denormalizers. You also don't need to think about defining schemes as you would normally do for the regular JSON documents and keeping them up-to-date in case some changes in the object definitions will take place, thanks to JSON API verbosity and types.
-
 # Conclusion
-json-api-normalizer and redux-object libraries were developed very recently. They might look very simple, but it took me lots of time and experience to eventually come up with such implementation. By using them, you can avoid lots of traps and pitfalls I faced in the last year. So I am quite sure that these simple tools might be very helpful for the community and they will help to save a lot of time for many people.
+So this ends up the story I would like to tell. This approach help us to prototype a lot faster and be very prone to data model changes. As data comes out typified and in a flat structure from the backend, we don't need to know in advance relationships between data objects and exact fields. Data will be saved in the Redux store in a format, which conforms to the Redux best practices anyway. This helps us to dedicate most of our time on the feature development and experiments rather than adopting normalizr schemes, rethinking selectors, and debugging over and over again.
 
-Feel free to join the discussion and help me to improve these tools.
-
+I encourage you to try JSON API in your next pet project and ensure that you can spend more time on experiments without fear of breaking things :)
 
 # Links
 1. [JSON API Specs](http://jsonapi.org/)

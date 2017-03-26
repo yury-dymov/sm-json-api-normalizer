@@ -83,7 +83,7 @@ Same principles are widely used in [RDMBS](https://en.wikipedia.org/wiki/Relatio
 
 ## 2. Store Collections As Maps Whenever Possible
 
-Ok, so we got the data in a nice flat structure. It is a very common practice to incrementally accumulate received data in either Redux store and/or local storage so that we can re-use it later as a cache to improve the performance or for the offline usage.
+Ok, so we got the data in a nice flat structure. It is a very common practice to incrementally accumulate received data so that we can re-use it later as a cache to improve the performance or for the offline usage.
 
 However, after merging new data to the existing storage, we need to select only relevant data objects for the particular view, not everything we received so far. To achieve that, we can store the structure of each JSON document separately, so we can quickly figure out, which data objects were provided within a particular request. This structure will contain a list of the data object IDs, which we can use to fetch the data from the storage.
 
@@ -103,18 +103,6 @@ Let me illustrate this point. We will perform two requests to fetch a list of fr
 ```
 
 So, here we are getting User data object with ID "1" and name "Mike," which might be stored like this:
-
-#### Storage State #1
-```JSON
-{
-  "users": [
-    {
-      "id": "1",
-      "name": "Mike"
-    }
-  ]
-}
-```
 
 Another request will return us User with ID "2" and name "Kevin":
 
@@ -194,7 +182,7 @@ Let's briefly recap operation complexities.
 
 *Note: if you are note very familiar with Big O Notation, "n" here means the number of data objects, O(1) means that operation will take relatively the same amount of time regardless of the data set size, and O(n) means that operation execution time is linearly dependent on the data set size. You can read more on Big O Notation [here](https://en.wikipedia.org/wiki/Big_O_notation)* 
 
-As we can see, Maps will work a lot better than Arrays as all operations have complexity O(1) instead of O(n). If data object order is important, we still can use Maps for the data handling and save the ordering information in the metadata.
+As we can see, Maps will work a lot better than Arrays as all operations have complexity O(1) instead of O(n). If data object order is important, we still can use Maps for the data handling and save the ordering information in the metadata. Maps can be also easily transformed into Arrays and sorted if required.
 
 Let me reimplement storage mentioned above and use Map over Array for the User data object.
 
@@ -320,14 +308,14 @@ JSON API main features:
  }
 ```
 
-It might seem that JSON API is too verbose compared to the traditional JSON, isn't it?
+It might seem that JSON API is too verbose when comparing it to traditional JSON, right?
 
 | Type | Raw (bytes) | Gzipped (bytes) |
 ------|:---------------:|:-----------:|
 | Typical JSON | 264 | 170 |
 | JSON API| 771 | 293 |
 
-The size difference in a raw format is very remarkable, but gzipped versions are much closer to each other.
+While the raw size difference might be remarkable, the gzipped sizes are much closer to each other.
 
 Keep in mind that it is also possible to develop a synthetic example, which will have a greater size in a Typical JSON format compared to the JSON API. Imagine dozens of blog posts, which share the same author. In a Typical JSON document, you will have to store Author object for each Post Object and in the JSON API format Author object will be stored only once.
 
@@ -343,7 +331,7 @@ Let's discuss the advantages.
 
 ## JSON API And Redux
 
-How two work together? Absolutely great!
+Redux and JSON API work great when used together; they compliment each other well.
 
 JSON API provides data in a flat structure by definition, which conforms nicely with Redux best practices. Data comes typified so that it can be naturally saved in the Redux storage in a Map with the format "type" => Map of objects. Are we missing something?
 
@@ -351,7 +339,7 @@ Despite the fact that dividing data objects into two types `data` and `included`
 
 As we discussed, JSON API also returns a collection of objects in the form of an array but for the redux store using maps is a lot more suitable option.
 
-To fill this gap, I have recently developed [json-api-normalizer](https://github.com/yury-dymov/json-api-normalizer) library.
+To resolve these issues, you may consider using my [json-api-normalizer](https://github.com/yury-dymov/json-api-normalizer) library.
 
 Main features:
 
@@ -368,11 +356,14 @@ json-api-normalizer can store web service response structure in a special `meta`
 
 Once again, we will build a very simple web app, which will render the survey data provided by backend in a JSON API format. 
 
+We will start with the boilerplate, which has everything we need for the basic React app, implement a Redux middleware to process JSON API documents and provide the reducers data in an appropriate format, and build a simple UI on top of that.
+
 First of all, we need a backend with a JSON API support. As this article is fully dedicated to the frontend development, I prebuilt publically available data source so that we can focus on our Web App. If you are interested, you may check [the source code](https://github.com/yury-dymov/phoenix-json-api-example). Note that there are many [JSON API implementation libraries](http://jsonapi.org/implementations/) available for all kind of technology stacks, so feel free to choose one, which will work best for you.
 
 My demo web service provides us two questions. First one has two answers, second — three. The second answer to the first question has three comments.
 
 You can review the web service output [here](https://phoenix-json-api-example.herokuapp.com/api/test), which will be converted to something similar to this after the user presses the button, and data is successfully fetched.
+
 
 ## 1. Download The Boilerplate
 To reduce time on Web App configuration, I developed [small React boilerplate](https://github.com/yury-dymov/json-api-react-redux-example/tree/initial), which can be used as a starting point.
@@ -657,10 +648,6 @@ export default connect(mapStateToProps)(Content);
 
 We are fetching object IDs from metadata of the API request with '/test' endpoint, building JavaScript Objects with `redux-object` library and providing them to our component in the "questions" prop.
 
-# Editor's Note: This is where I mentioned in my email that I'd like to see more details about what you're building. Following you have several components with only a one-liner to describe what they are. It'd be great for the reader to have more details. 
-
-# Yury's Note: I added some information, but surprisingly it is not that easy. As components are simple, it is hard to write more than one sentence.
-
 Now we need to implement a bunch of "dumb" components for rendering questions, posts, comments and users. They are very straightforward.
 
 Question visualization component package.json:
@@ -810,7 +797,7 @@ If something doesn't work for you, feel free to compare your code with [my proje
 Live demo is also available [here](https://yury-dymov.github.io/json-api-react-redux-example)
 
 # Conclusion
-So this ends up the story I would like to tell. This approach help us to prototype a lot faster and be very prone to data model changes. As data comes out typified and in a flat structure from the backend, we don't need to know in advance relationships between data objects and exact fields. Data will be saved in the Redux store in a format, which conforms to the Redux best practices anyway. This helps us to dedicate most of our time on the feature development and experiments rather than adopting normalizr schemes, rethinking selectors, and debugging over and over again.
+So this ends up the story I would like to tell. This approach helps us to prototype a lot faster and be very prone to data model changes. As data comes out typified and in a flat structure from the backend, we don't need to know in advance relationships between data objects and specific fields. Data will be saved in the Redux store in a format, which conforms to the Redux best practices anyway. This helps us to dedicate most of our time on the feature development and experiments rather than adopting normalizr schemes, rethinking selectors and debugging over and over again.
 
 I encourage you to try JSON API in your next pet project and ensure that you can spend more time on experiments without fear of breaking things :)
 
